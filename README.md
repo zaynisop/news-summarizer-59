@@ -16,11 +16,18 @@
    ```
    The home page `/` shows the registration number.
 
-## Build, run, push
+## Docker Hub image
+`zaynop/news-summarizer-59:latest`
+
 ```bash
-docker build -t <dockerhub-user>/news-summarizer-59:latest .
-docker run -d -p 7000:7000 <dockerhub-user>/news-summarizer-59:latest
+docker pull zaynop/news-summarizer-59:latest
+docker run -d -p 7000:7000 zaynop/news-summarizer-59:latest
 curl "http://localhost:7000/get?keyword=quantum"
-docker push <dockerhub-user>/news-summarizer-59:latest
+```
+
+## Build and push yourself
+```bash
+docker build -t zaynop/news-summarizer-59:latest .
+docker push zaynop/news-summarizer-59:latest
 ```
 To use a different registration number without rebuilding: `docker run -e REGISTRATION=FA23-BCT-059 ...`

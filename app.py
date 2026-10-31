@@ -37,8 +37,8 @@ def get_news():
         result["url"] = url or ""
         result["summary"] = summarize(text) if text else (title or "No article found for this keyword.")
     except Exception as exc:
-        result["summary"] = f"Error while scraping: {exc}"
-        return jsonify(result), 500
+        # keep the JSON contract; report only the first line, not Selenium's stack trace
+        result["summary"] = "Error while scraping: " + (str(exc).strip().splitlines() or [""])[0]
     return jsonify(result)
 
 

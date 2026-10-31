@@ -4,13 +4,17 @@ import time
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 from selenium import webdriver
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 
 from config import ARTICLE_PATTERN, NEWS_DOMAIN, RESULT_SELECTOR, SEARCH_URL
 
-BOILERPLATE = re.compile(r"cookie|subscribe to|newsletter|sign up|all rights reserved|javascript", re.I)
+BOILERPLATE = re.compile(
+    r"cookie|consent|partner|subscribe to|newsletter|sign up|all rights reserved|javascript|advertisement",
+    re.I,
+)
 
 
 def make_driver():
@@ -24,56 +28,69 @@ def make_driver():
         "user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"
     )
+    # Don't wait for ads/trackers to finish loading; the HTML content is ready much earlier.
+    opts.page_load_strategy = "eager"
     driver = webdriver.Chrome(service=Service("/usr/local/bin/chromedriver"), options=opts)
-    driver.set_page_load_timeout(45)
+    driver.set_page_load_timeout(25)
     return driver
 
 
-def _first_article_link(driver, timeout=20):
-    """Return the first link on the current page that looks like an article on the news site."""
-    pattern = re.compile(ARTICLE_PATTERN)
+def _open(driver, url):
+    """Load a page; if it is still loading after the timeout, stop it and use what is there."""
+    try:
+        driver.get(url)
+    except TimeoutException:
+        try:
+            driver.execute_script("window.stop();")
+        except Exception:
+            pass
+
+
+def _is_article(href):
+    return urlparse(href).netloc in (NEWS_DOMAIN, "www." + NEWS_DOMAIN) and re.search(ARTICLE_PATTERN, href)
+
+
+def _first_article_link(driver, timeout=15):
+    """Return the first link in the site's search-result list that is an article."""
     end = time.time() + timeout
     while time.time() < end:
-        anchors = driver.find_elements(By.CSS_SELECTOR, RESULT_SELECTOR) or driver.find_elements(By.TAG_NAME, "a")
-        for a in anchors:
+        for a in driver.find_elements(By.CSS_SELECTOR, RESULT_SELECTOR):
             try:
                 href = a.get_attribute("href") or ""
-                # skip site navigation / promo links that are not search results
-                in_chrome = driver.execute_script(
-                    "return !!arguments[0].closest('header, nav, footer, [role=navigation]')", a
-                )
             except Exception:
                 continue
-            if NEWS_DOMAIN in href and pattern.search(href) and not in_chrome:
+            if _is_article(href):
                 return href.split("#")[0]
         time.sleep(1)
     return None
 
 
 def _search_site(driver, keyword):
-    driver.get(SEARCH_URL.format(q=quote_plus(keyword)))
+    _open(driver, SEARCH_URL.format(q=quote_plus(keyword)))
     return _first_article_link(driver)
 
 
 def _search_fallback(driver, keyword):
     # Used only if the site's own search page returns nothing (e.g. blocked or changed layout).
-    driver.get(f"https://html.duckduckgo.com/html/?q={quote_plus(keyword + ' site:' + NEWS_DOMAIN)}")
+    _open(driver, f"https://html.duckduckgo.com/html/?q={quote_plus(keyword + ' site:' + NEWS_DOMAIN)}")
     for a in driver.find_elements(By.CSS_SELECTOR, "a.result__a"):
         href = a.get_attribute("href") or ""
         if "uddg=" in href:
             href = unquote(parse_qs(urlparse(href).query).get("uddg", [""])[0])
-        if NEWS_DOMAIN in href and re.search(ARTICLE_PATTERN, href):
+        if _is_article(href):
             return href
     return None
 
 
 def _article_text(driver, url):
-    driver.get(url)
+    _open(driver, url)
     time.sleep(3)
     paragraphs = []
     for selector in ("article p", "main p", "p"):
-        paragraphs = [p.text.strip() for p in driver.find_elements(By.CSS_SELECTOR, selector)]
-        paragraphs = [p for p in paragraphs if len(p.split()) > 8 and p.count("\n") < 3 and not BOILERPLATE.search(p)]
+        # textContent also covers paragraphs the site hides with CSS (e.g. metered articles)
+        paragraphs = [" ".join((p.get_attribute("textContent") or "").split())
+                      for p in driver.find_elements(By.CSS_SELECTOR, selector)]
+        paragraphs = [p for p in paragraphs if len(p.split()) > 8 and not BOILERPLATE.search(p)]
         if paragraphs:
             break
     title = driver.title or ""
